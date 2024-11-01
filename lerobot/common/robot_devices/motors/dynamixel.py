@@ -27,7 +27,7 @@ PROTOCOL_VERSION = 2.0
 BAUDRATE = 1_000_000
 TIMEOUT_MS = 1000
 
-MAX_ID_RANGE = 252
+MAX_ID_RANGE = 20
 
 # The following bounds define the lower and upper joints range (after calibration).
 # For joints in degree (i.e. revolute joints), their nominal range is [-180, 180] degrees
@@ -584,6 +584,7 @@ class DynamixelMotorsBus:
         To harmonize between motors of the same model, different robots, or even models of different brands, we propose to work
         in the centered nominal degree range ]-180, 180[.
         """
+        # print(f"Applying calibration, values: {values}")
         if motor_names is None:
             motor_names = self.motor_names
 
@@ -595,10 +596,13 @@ class DynamixelMotorsBus:
             calib_mode = self.calibration["calib_mode"][calib_idx]
 
             if CalibrationMode[calib_mode] == CalibrationMode.DEGREE:
+                # print(f"Applying calibration for {name}, type = degree")
                 drive_mode = self.calibration["drive_mode"][calib_idx]
                 homing_offset = self.calibration["homing_offset"][calib_idx]
+                # print(f"drive_mode: {drive_mode}, homing_offset: {homing_offset}")
                 _, model = self.motors[name]
                 resolution = self.model_resolution[model]
+                # print(f"resolution: {resolution}, model: {model}")
 
                 # Update direction of rotation of the motor to match between leader and follower.
                 # In fact, the motor of the leader for a given joint can be assembled in an
@@ -609,11 +613,14 @@ class DynamixelMotorsBus:
                 # Convert from range [-2**31, 2**31] to
                 # nominal range [-resolution//2, resolution//2] (e.g. [-2048, 2048])
                 values[i] += homing_offset
+                
+                # print(f"values after homing and drive: {values}")  
 
                 # Convert from range [-resolution//2, resolution//2] to
                 # universal float32 centered degree range [-180, 180]
                 # (e.g. 2048 / (4096 // 2) * 180 = 180)
                 values[i] = values[i] / (resolution // 2) * HALF_TURN_DEGREE
+                # print(f"values after conversion: {values}")   
 
                 if (values[i] < LOWER_BOUND_DEGREE) or (values[i] > UPPER_BOUND_DEGREE):
                     raise JointOutOfRangeError(
@@ -643,6 +650,7 @@ class DynamixelMotorsBus:
                         "You need to recalibrate by running: `python lerobot/scripts/control_robot.py calibrate`"
                     )
 
+        # print(f"Calibrated values: {values}")
         return values
 
     def autocorrect_calibration(self, values: np.ndarray | list, motor_names: list[str] | None):
@@ -664,6 +672,7 @@ class DynamixelMotorsBus:
 
         Note: A full turn corresponds to 360 degrees but also to 4096 steps for a motor resolution of 4096.
         """
+        print(f"AUTOCORRECT calibration, values: {values}")
         if motor_names is None:
             motor_names = self.motor_names
 
@@ -742,6 +751,7 @@ class DynamixelMotorsBus:
                 self.calibration["homing_offset"][calib_idx] += resolution * factor
 
     def revert_calibration(self, values: np.ndarray | list, motor_names: list[str] | None):
+        # print(f"Reverting calibration, values: {values}")
         """Inverse of `apply_calibration`."""
         if motor_names is None:
             motor_names = self.motor_names
@@ -751,14 +761,18 @@ class DynamixelMotorsBus:
             calib_mode = self.calibration["calib_mode"][calib_idx]
 
             if CalibrationMode[calib_mode] == CalibrationMode.DEGREE:
+                # print(f"Reverting calibration for motor '{name}' in degree.")
                 drive_mode = self.calibration["drive_mode"][calib_idx]
                 homing_offset = self.calibration["homing_offset"][calib_idx]
+                # print(f"Drive mode: {drive_mode}, homing offset: {homing_offset}")
                 _, model = self.motors[name]
                 resolution = self.model_resolution[model]
+                # print(f"Resolution: {resolution}, model: {model}")
 
                 # Convert from nominal 0-centered degree range [-180, 180] to
                 # 0-centered resolution range (e.g. [-2048, 2048] for resolution=4096)
                 values[i] = values[i] / HALF_TURN_DEGREE * (resolution // 2)
+                # print(f"Values after conversion to resolution range: {values}")
 
                 # Substract the homing offsets to come back to actual motor range of values
                 # which can be arbitrary.
@@ -768,6 +782,8 @@ class DynamixelMotorsBus:
                 # actual motor rotation direction which can be arbitrary.
                 if drive_mode:
                     values[i] *= -1
+                    
+                # print(f"Values after removing homing offset and drive mode: {values}")
 
             elif CalibrationMode[calib_mode] == CalibrationMode.LINEAR:
                 start_pos = self.calibration["start_pos"][calib_idx]
@@ -778,6 +794,7 @@ class DynamixelMotorsBus:
                 values[i] = values[i] / 100 * (end_pos - start_pos) + start_pos
 
         values = np.round(values).astype(np.int32)
+        # print(f"Values after rounding: {values}")
         return values
 
     def _read_with_motor_ids(self, motor_models, motor_ids, data_name):

@@ -89,11 +89,15 @@ def run_arm_calibration(arm: MotorsBus, robot_type: str, arm_name: str, arm_type
     # It is easy to identify and all motors are in a "quarter turn" position. Once calibration is done, this position will
     # correspond to every motor angle being 0. If you set all 0 as Goal Position, the arm will move in this position.
     zero_target_pos = convert_degrees_to_steps(ZERO_POSITION_DEGREE, arm.motor_models)
+    print(f"Zero target position: {zero_target_pos}")
 
     # Compute homing offset so that `present_position + homing_offset ~= target_position`.
     zero_pos = arm.read("Present_Position")
+    print(f"Zero present position: {zero_pos}")
     zero_nearest_pos = compute_nearest_rounded_position(zero_pos, arm.motor_models)
+    print(f"Zero nearest position: {zero_nearest_pos}")
     homing_offset = zero_target_pos - zero_nearest_pos
+    print(f"Homing offset: {homing_offset}")
 
     # The rotated target position corresponds to a rotation of a quarter turn from the zero position.
     # This allows to identify the rotation direction of each motor.
@@ -107,16 +111,22 @@ def run_arm_calibration(arm: MotorsBus, robot_type: str, arm_name: str, arm_type
     input("Press Enter to continue...")
 
     rotated_target_pos = convert_degrees_to_steps(ROTATED_POSITION_DEGREE, arm.motor_models)
+    print(f"Rotated target position: {rotated_target_pos}")
 
     # Find drive mode by rotating each motor by a quarter of a turn.
     # Drive mode indicates if the motor rotation direction should be inverted (=1) or not (=0).
     rotated_pos = arm.read("Present_Position")
+    print(f"Rotated present position: {rotated_pos}")
     drive_mode = (rotated_pos < zero_pos).astype(np.int32)
+    print(f"Drive mode: {drive_mode}")
 
     # Re-compute homing offset to take into account drive mode
     rotated_drived_pos = apply_drive_mode(rotated_pos, drive_mode)
+    print(f"Rotated present position after applying drive mode: {rotated_drived_pos}")
     rotated_nearest_pos = compute_nearest_rounded_position(rotated_drived_pos, arm.motor_models)
+    print(f"Rotated nearest position after applying drive mode: {rotated_nearest_pos}")
     homing_offset = rotated_target_pos - rotated_nearest_pos
+    print(f"Updated homing offset: {homing_offset}")
 
     print("\nMove arm to rest position")
     print("See: " + URL_TEMPLATE.format(robot=robot_type, arm=arm_type, position="rest"))

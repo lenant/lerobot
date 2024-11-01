@@ -324,9 +324,11 @@ class OpenCVCamera:
 
         h, w, _ = color_image.shape
         if h != self.height or w != self.width:
-            raise OSError(
-                f"Can't capture color image with expected height and width ({self.height} x {self.width}). ({h} x {w}) returned instead."
-            )
+            self.height = h
+            self.width = w
+            # raise OSError(
+                # f"Can't capture color image with expected height and width ({self.height} x {self.width}). ({h} x {w}) returned instead."
+            # )
 
         # log the number of seconds it took to read the image
         self.logs["delta_timestamp_s"] = time.perf_counter() - start_time
