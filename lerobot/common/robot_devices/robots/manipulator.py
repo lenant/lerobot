@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Sequence
 
+import cv2
 import numpy as np
 import torch
 
@@ -19,6 +20,17 @@ from lerobot.common.robot_devices.cameras.utils import Camera
 from lerobot.common.robot_devices.motors.utils import MotorsBus
 from lerobot.common.robot_devices.robots.utils import get_arm_id
 from lerobot.common.robot_devices.utils import RobotDeviceAlreadyConnectedError, RobotDeviceNotConnectedError
+
+import mediapipe as mp
+
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
+hands = mp_hands.Hands(
+                model_complexity=1,
+                static_image_mode=False,
+                max_num_hands=2,
+                min_detection_confidence=0.01,
+                min_tracking_confidence=0.1) 
 
 
 def ensure_safe_goal_position(
@@ -533,6 +545,7 @@ class ManipulatorRobot:
         for name in self.cameras:
             before_camread_t = time.perf_counter()
             images[name] = self.cameras[name].async_read()
+            images[name], target = self.image_to_hand_pose(images[name])
             images[name] = torch.from_numpy(images[name])
             self.logs[f"read_camera_{name}_dt_s"] = self.cameras[name].logs["delta_timestamp_s"]
             self.logs[f"async_read_camera_{name}_dt_s"] = time.perf_counter() - before_camread_t
@@ -540,11 +553,108 @@ class ManipulatorRobot:
         # Populate output dictionnaries
         obs_dict, action_dict = {}, {}
         obs_dict["observation.state"] = state
+        obs_dict["observation.target"] = target
         action_dict["action"] = action
         for name in self.cameras:
             obs_dict[f"observation.images.{name}"] = images[name]
 
         return obs_dict, action_dict
+    
+    def image_to_hand_pose(self, image):
+        # Convert the BGR frame to RGB.
+        rgb_frame = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # Process the frame to detect hands.
+        results = hands.process(rgb_frame)
+
+        # Create a black image.
+        black_frame = np.zeros((image.shape[0], image.shape[1], 3), dtype=np.uint8)
+        
+        # Get total screen area
+        screen_area = image.shape[0] * image.shape[1]
+
+        # Define colors for different points based on their id.
+        colors = [
+            (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255),
+            (0, 255, 255), (128, 0, 0), (0, 128, 0), (0, 0, 128), (128, 128, 0),
+            (128, 0, 128), (0, 128, 128), (64, 0, 0), (0, 64, 0), (0, 0, 64),
+            (64, 64, 0), (64, 0, 64), (0, 64, 64), (192, 0, 0), (0, 192, 0),
+            (0, 0, 192)
+        ]
+
+        # Store hand areas and their bounding boxes
+        hand_areas = []
+        target = None
+        
+        # Draw hand landmarks and calculate areas
+        if results.multi_hand_landmarks and results.multi_handedness:
+            for hand_landmarks, handedness in zip(results.multi_hand_landmarks, results.multi_handedness):
+                # Check if fingers are extended using MediaPipe's finger status
+                # In MediaPipe, points 8,12,16,20 are fingertips
+                fingertips = [8, 12, 16, 20]
+                mcp_points = [5, 9, 13, 17]  # Base points of fingers
+                is_open_hand = True
+                
+                # Check if all fingers are extended (their Y is significantly above the MCP points)
+                for tip, mcp in zip(fingertips, mcp_points):
+                    tip_y = hand_landmarks.landmark[tip].y
+                    mcp_y = hand_landmarks.landmark[mcp].y
+                    if tip_y > mcp_y:  # If fingertip is below base point, finger is not extended
+                        is_open_hand = False
+                        break
+                
+                # Draw connections with white color
+                mp_drawing.draw_landmarks(
+                    black_frame, hand_landmarks, mp_hands.HAND_CONNECTIONS,
+                    mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2, circle_radius=2),
+                    mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2, circle_radius=2)
+                )
+                
+                # Find bounding box for the hand
+                x_coords = []
+                y_coords = []
+                for idx, landmark in enumerate(hand_landmarks.landmark):
+                    x = int(landmark.x * black_frame.shape[1])
+                    y = int(landmark.y * black_frame.shape[0])
+                    x_coords.append(x)
+                    y_coords.append(y)
+                    
+                    # Draw landmarks with correct color index
+                    radius = max(1, int((1 - landmark.z) * 10))
+                    color = colors[idx % len(colors)]
+                    cv2.circle(black_frame, (x, y), radius, color, -1)
+                
+                if is_open_hand:  # Only process area if hand is open
+                    # Calculate bounding box
+                    min_x, max_x = min(x_coords), max(x_coords)
+                    min_y, max_y = min(y_coords), max(y_coords)
+                    area = (max_x - min_x) * (max_y - min_y)
+                    
+                    hand_areas.append({
+                        'area': area,
+                        'bbox': (min_x, min_y, max_x, max_y)
+                    })
+            
+            # Find the largest hand area among open hands
+            if hand_areas:
+                largest_hand = max(hand_areas, key=lambda x: x['area'])
+                largest_area_proportion = largest_hand['area'] / screen_area
+                
+                # Draw rectangle around the largest hand
+                min_x, min_y, max_x, max_y = largest_hand['bbox']
+                if largest_area_proportion > 0.04:
+                    color = (0, 255, 0)  
+                    target = ((min_x + max_x) // 2, (min_y + max_y) // 2)
+                else:
+                    target = None
+                    color = (0, 0, 255)
+                cv2.rectangle(black_frame, (min_x, min_y), (max_x, max_y), color, 2)
+                
+                # Write the proportion on screen
+                text = f"Largest open hand area: {largest_area_proportion:.2%}"
+                cv2.putText(black_frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
+                        1, (255, 255, 255), 2)
+
+        return black_frame, target
 
     def capture_observation(self):
         """The returned observations do not have a batch dimension."""
@@ -573,6 +683,7 @@ class ManipulatorRobot:
         for name in self.cameras:
             before_camread_t = time.perf_counter()
             images[name] = self.cameras[name].async_read()
+            images[name], target = self.image_to_hand_pose(images[name])
             images[name] = torch.from_numpy(images[name])
             self.logs[f"read_camera_{name}_dt_s"] = self.cameras[name].logs["delta_timestamp_s"]
             self.logs[f"async_read_camera_{name}_dt_s"] = time.perf_counter() - before_camread_t
@@ -580,6 +691,7 @@ class ManipulatorRobot:
         # Populate output dictionnaries and format to pytorch
         obs_dict = {}
         obs_dict["observation.state"] = state
+        obs_dict["observation.target"] = target
         for name in self.cameras:
             obs_dict[f"observation.images.{name}"] = images[name]
         return obs_dict

@@ -18,7 +18,7 @@ max_relative_target: null
 leader_arms:
   main:
     _target_: lerobot.common.robot_devices.motors.feetech.FeetechMotorsBus
-    port: /dev/tty.usbmodem585A0077581
+    port: /dev/tty.usbmodem58760431451
     motors:
       # name: (index, model)
       shoulder_pan: [1, "sts3215"]
@@ -31,7 +31,7 @@ leader_arms:
 follower_arms:
   main:
     _target_: lerobot.common.robot_devices.motors.feetech.FeetechMotorsBus
-    port: /dev/tty.usbmodem585A0080971
+    port: /dev/tty.usbmodem58760432091
     motors:
       # name: (index, model)
       shoulder_pan: [1, "sts3215"]
@@ -42,15 +42,15 @@ follower_arms:
       gripper: [6, "sts3215"]
 
 cameras:
-  laptop:
-    _target_: lerobot.common.robot_devices.cameras.opencv.OpenCVCamera
-    camera_index: 0
-    fps: 30
-    width: 640
-    height: 480
+  # laptop:
+  #   _target_: lerobot.common.robot_devices.cameras.opencv.OpenCVCamera
+  #   camera_index: 0
+  #   fps: 30
+  #   width: 640
+  #   height: 480
   phone:
     _target_: lerobot.common.robot_devices.cameras.opencv.OpenCVCamera
-    camera_index: 1
+    camera_index: 3
     fps: 30
-    width: 640
-    height: 480
+    width: 1920
+    height: 1080

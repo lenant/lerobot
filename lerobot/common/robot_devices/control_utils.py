@@ -11,6 +11,7 @@ from copy import copy
 from functools import cache
 
 import cv2
+import numpy as np
 import torch
 import tqdm
 from termcolor import colored
@@ -21,7 +22,13 @@ from lerobot.common.robot_devices.robots.utils import Robot
 from lerobot.common.robot_devices.utils import busy_wait
 from lerobot.common.utils.utils import get_safe_torch_device, init_hydra_config, set_global_seed
 from lerobot.scripts.eval import get_pretrained_policy_path
+from enum import Enum
 
+class HighFiveState(Enum):
+    HIGH_FIVE_IN_PROCESS = "HIGH_FIVE_IN_PROCESS"
+    HIGH_FIVE_DONE = "HIGH_FIVE_DONE"
+
+state = None
 
 def log_control_info(robot: Robot, dt_s, episode_index=None, frame_index=None, fps=None):
     log_items = []
@@ -234,6 +241,7 @@ def control_loop(
     use_amp=None,
     fps=None,
 ):
+    dataset = None
     # TODO(rcadene): Add option to record logs
     if not robot.is_connected:
         robot.connect()
@@ -250,6 +258,22 @@ def control_loop(
     if dataset is not None and fps is not None and dataset["fps"] != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset['fps']} != {fps}).")
 
+    if 'targets' not in globals():
+        targets = []
+    if 'last_five' not in globals():
+        last_five = [None] * 10
+        
+    high_five_position = [0, 55,  66, -100, 2, -12]
+    home_position = [0, 188, 172, -15, 0, -12]
+    max_speed_to_high_five = [7, 25, 25, 15, 15, 15]
+    max_speed_to_home = max_speed_to_high_five.copy()
+    max_speed_to_home[0] = 5
+    # max_speed = (np.array(max_speed) / 2).tolist()
+    
+    last_target = None
+    
+    state = None
+
     timestamp = 0
     start_episode_t = time.perf_counter()
     while timestamp < control_time_s:
@@ -261,11 +285,56 @@ def control_loop(
             observation = robot.capture_observation()
 
             if policy is not None:
-                pred_action = predict_action(observation, policy, device, use_amp)
-                # Action can eventually be clipped using `max_relative_target`,
-                # so action actually sent is saved in the dataset.
-                action = robot.send_action(pred_action)
-                action = {"action": action}
+                target = observation.get("observation.target", None)
+
+                targets.append(target)
+                last_five.pop(0)
+                last_five.append(target)
+
+                # Create variables target_locked and target_lost
+                target_locked = all(t is not None for t in last_five)
+                target_lost = all(t is None for t in last_five)
+                if target_locked and state is None:
+                    state = HighFiveState.HIGH_FIVE_IN_PROCESS
+                    
+                position = robot.follower_arms["main"].read("Present_Position")
+                if state == HighFiveState.HIGH_FIVE_IN_PROCESS:
+                    if all(abs(p - hfp) <= 4 for p, hfp in zip(position[1:], high_five_position[1:])):
+                        state = HighFiveState.HIGH_FIVE_DONE
+                        print("High five completed!")
+                    else:
+                        if target is not None:
+                            last_target = target
+                        print("position: ", position)
+                        target_position = high_five_position.copy()
+                        target_position[0] = 45 - (last_target[0] * (90 / 640)) ## 33 and 61 for not wide
+                        target_position = calc_move(target_position, max_speed_to_high_five, position)
+                        print("NEW high five position: ", target_position)
+                        robot.follower_arms["main"].write("Goal_Position", target_position)
+                elif state == HighFiveState.HIGH_FIVE_DONE:
+                    if all(abs(p - hfp) <= 4 for p, hfp in zip(position[1:], home_position[1:])):
+                        state = None
+                        print("Got home!")
+                    else:
+                        print("position: ", [f"{p:.3f}" for p in position], "home position: ", [f"{hp:.3f}" for hp in home_position])
+                        target_position = calc_move(home_position, max_speed_to_home, position)
+                        print("NEW to home position: ", target_position)
+                        robot.follower_arms["main"].write("Goal_Position", target_position)
+                    
+                # e
+                # elif target_lost:
+                #     print("position: ", [f"{p:.3f}" for p in position], "home position: ", [f"{hp:.3f}" for hp in home_position])
+                #     target_position = calc_move(home_position, max_speed, position)
+                #     print("NEW to home position: ", target_position)
+                #     robot.follower_arms["main"].write("Goal_Position", target_position)
+                    # time.sleep(0.1)
+                    # position_tensor = torch.tensor(position, dtype=torch.float32)
+                    # action = robot.send_action(position_tensor)
+                # pred_action = predict_action(observation, policy, device, use_amp)
+                # # Action can eventually be clipped using `max_relative_target`,
+                # # so action actually sent is saved in the dataset.
+                # action = robot.send_action(position)
+                # action = {"action": action}
 
         if dataset is not None:
             add_frame(dataset, observation, action)
@@ -287,6 +356,15 @@ def control_loop(
         if events["exit_early"]:
             events["exit_early"] = False
             break
+
+def calc_move(target_position, max_speed, position):
+    new_position = position.copy()
+    for i in range(len(new_position)):
+        if new_position[i] < target_position[i]:
+            new_position[i] = min(new_position[i] + max_speed[i], target_position[i])
+        else:
+            new_position[i] = max(new_position[i] - max_speed[i], target_position[i])
+    return new_position
 
 
 def reset_environment(robot, events, reset_time_s):
