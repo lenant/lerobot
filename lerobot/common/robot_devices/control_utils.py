@@ -263,16 +263,17 @@ def control_loop(
     if 'last_five' not in globals():
         last_five = [None] * 10
         
-    high_five_position = [0, 55,  66, -100, 2, -12]
-    home_position = [0, 188, 172, -15, 0, -12]
-    max_speed_to_high_five = [7, 25, 25, 15, 15, 15]
+    high_five_position = [0, 45,  56, -100, 2, -12]
+    home_position = [0, 188, 180, -15, 0, -12]
+    max_speed_to_high_five = [7, 25, 25, 15, 30, 15]
     max_speed_to_home = max_speed_to_high_five.copy()
     max_speed_to_home[0] = 5
+    max_speed_to_home[1] = 30
     # max_speed = (np.array(max_speed) / 2).tolist()
     
     last_target = None
     
-    state = None
+    state = HighFiveState.HIGH_FIVE_DONE
 
     timestamp = 0
     start_episode_t = time.perf_counter()

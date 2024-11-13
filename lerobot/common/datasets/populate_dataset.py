@@ -364,7 +364,7 @@ def encode_videos(dataset, image_keys, play_sounds):
             # note: `encode_video_frames` is a blocking call. Making it asynchronous shouldn't speedup encoding,
             # since video encoding with ffmpeg is already using multithreading.
             encode_video_frames(tmp_imgs_dir, video_path, fps, overwrite=True)
-            shutil.rmtree(tmp_imgs_dir)
+            # shutil.rmtree(tmp_imgs_dir)
 
 
 def from_dataset_to_lerobot_dataset(dataset, play_sounds):
